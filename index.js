@@ -209,14 +209,16 @@ function processFrame() {
   // console.log(
   //   `Center RGB = [${centerRGBA[0]}, ${centerRGBA[1]}, ${centerRGBA[2]}]`
   // );
-  let vDelta = 40,
-    hDelta = 40,
-    sDelta = 30;
+  //   let vDelta = 40;
+  //   let sDelta = 30;
+  let vDelta = Math.max(40, Math.round(V * 0.2)); // 20% of V, at least 40
+  let sDelta = Math.max(30, Math.round(S * 0.2)); // 20% of S, at least 30
+  let hDelta = 40;
 
   let lowerV = Math.max(V - vDelta, 0),
     upperV = Math.min(V + vDelta, 255);
   let lowerH = Math.max(H - hDelta, 0),
-    upperH = Math.min(H + hDelta, 255);
+    upperH = Math.min(H + hDelta, 179);
   let lowerS = Math.max(S - sDelta, 0),
     upperS = Math.min(S + sDelta, 255);
 
@@ -413,57 +415,6 @@ function runGrabCutWithMask(src, maskHull, iterations = 5) {
   return grabCutMask;
 }
 
-// function measureMaskHeight() {
-//   // Get the mask data from canvas
-//   const maskData = canvasTestContext.getImageData(
-//     0,
-//     0,
-//     canvasTestOutput.width,
-//     canvasTestOutput.height
-//   ).data;
-
-//   let topPixel = null;
-//   let bottomPixel = null;
-
-//   // Loop through the entire image to find the highest and lowest mask pixel
-//   for (let y = 0; y < canvasTestOutput.height; y++) {
-//     for (let x = 0; x < canvasTestOutput.width; x++) {
-//       const index = (y * canvasTestOutput.width + x) * 4; // RGBA index
-
-//       if (maskData[index + 3] > 0) {
-//         // Check Alpha channel for mask presence
-//         if (topPixel === null || y < topPixel) topPixel = y; // Find highest point
-//         if (bottomPixel === null || y > bottomPixel) bottomPixel = y; // Find lowest point
-//       }
-//     }
-//   }
-
-//   if (topPixel === null || bottomPixel === null) {
-//     alert("No mask detected. Try segmenting an object first.");
-//     return;
-//   }
-
-//   // Calculate mask height
-//   let maskHeight = bottomPixel - topPixel;
-//   console.log(`Mask height: ${maskHeight} pixels`);
-
-//   // Draw a vertical measurement line from top-most to bottom-most detected mask pixel
-//   canvasTestContext.strokeStyle = "red";
-//   canvasTestContext.lineWidth = 2;
-//   canvasTestContext.beginPath();
-//   canvasTestContext.moveTo(canvasTestOutput.width / 2, topPixel); // Center X
-//   canvasTestContext.lineTo(canvasTestOutput.width / 2, bottomPixel);
-//   canvasTestContext.stroke();
-
-//   // Draw text showing height
-//   canvasTestContext.fillStyle = "red";
-//   canvasTestContext.font = "18px Arial";
-//   canvasTestContext.fillText(
-//     `${maskHeight} px`,
-//     canvasTestOutput.width / 2 + 10,
-//     (topPixel + bottomPixel) / 2
-//   );
-// }
 function measureMaskHeight() {
   // Get the mask data from canvasTestOutput
   const maskData = canvasTestContext.getImageData(
