@@ -47,12 +47,12 @@
     <video id="video" width="640" height="480" class="hidden"></video>
     <!-- Hidden canvas for frame copying -->
     <canvas id="hiddenCanvas" width="640" height="480" class="hidden"></canvas>
-    <canvas
+    <!-- <canvas
       id="canvasTestOutput"
       width="640"
       height="480"
       class="border border-gray-700 shadow-lg"
-    ></canvas>
+    ></canvas> -->
     <!-- Canvas to display segmentation result -->
     <div class="flex justify-center mb-6">
       <div class="relative inline-block">
@@ -91,7 +91,7 @@
       let cameraStream = null;
       let video = document.getElementById("video");
       let canvasOutput = document.getElementById("canvasOutput");
-      let canvasTestOutput = document.getElementById("canvasTestOutput");
+      // let canvasTestOutput = document.getElementById("canvasTestOutput");
       let hiddenCanvas = document.getElementById("hiddenCanvas");
       let hiddenCtx = hiddenCanvas.getContext("2d", {
         willReadFrequently: true,
@@ -182,7 +182,9 @@
       function startCamera() {
         navigator.mediaDevices
           .getUserMedia({
-            video: true,
+            video: {
+              facingMode: { ideal: "environment" }, // Prefer the back camera on mobile devices.
+            },
             audio: false,
           })
           .then((stream) => {
