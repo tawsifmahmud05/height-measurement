@@ -47,12 +47,7 @@
     <video id="video" width="640" height="480" class="hidden"></video>
     <!-- Hidden canvas for frame copying -->
     <canvas id="hiddenCanvas" width="640" height="480" class="hidden"></canvas>
-    <!-- <canvas
-      id="canvasTestOutput"
-      width="640"
-      height="480"
-      class="border border-gray-700 shadow-lg"
-    ></canvas> -->
+
     <!-- Canvas to display segmentation result -->
     <div class="flex justify-center mb-6">
       <div class="relative inline-block">
@@ -75,23 +70,46 @@
         </div>
       </div>
     </div>
+    <div class="flex justify-center mb-6">
+      <canvas
+        id="canvasTestOutput"
+        width="640"
+        height="480"
+        class="border border-gray-700 shadow-lg"
+        hidden
+      ></canvas>
+      <canvas
+        id="canvasCaptureOutput"
+        width="640"
+        height="480"
+        class="border border-gray-700 shadow-lg"
+      ></canvas>
+    </div>
 
-    <!-- <div class="flex justify-center">
+    <div class="flex justify-center">
       <button
-        onclick="processFrame()"
-        class="bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 px-4 rounded shadow"
+        id="btnCapture"
+        class="bg-purple-500 hover:bg-purple-600 text-white font-semibold py-2 px-4 rounded shadow"
       >
-        Segment
+        Capture
       </button>
-    </div> -->
+    </div>
 
     <script type="text/javascript">
       // === Global Variables ===
       let prevHullPoints = null;
       let cameraStream = null;
+      let maskHull = null;
       let video = document.getElementById("video");
+
       let canvasOutput = document.getElementById("canvasOutput");
-      // let canvasTestOutput = document.getElementById("canvasTestOutput");
+
+      let canvasTestOutput = document.getElementById("canvasTestOutput");
+      let canvasTestContext = canvasTestOutput.getContext("2d");
+
+      let canvasCaptureOutput = document.getElementById("canvasCaptureOutput");
+      let canvasCaptureContext = canvasCaptureOutput.getContext("2d");
+
       let hiddenCanvas = document.getElementById("hiddenCanvas");
       let hiddenCtx = hiddenCanvas.getContext("2d", {
         willReadFrequently: true,
@@ -124,6 +142,7 @@
         const btnStartCamera = document.getElementById("btnStartCamera");
         const btnLoadVideo = document.getElementById("btnLoadVideo");
         const btnPauseVideo = document.getElementById("btnPauseVideo");
+        const btnCapture = document.getElementById("btnCapture");
         const videoInput = document.getElementById("videoInput");
 
         // Start Camera button
@@ -175,6 +194,28 @@
             video.pause();
             btnPauseVideo.textContent = "Resume Video";
           }
+        });
+
+        btnCapture.addEventListener("click", function () {
+          // Get the captured canvas and its context.
+          let maskHullCopy = maskHull.clone();
+
+          // Clear the captured canvas (optional)
+          canvasTestContext.clearRect(
+            0,
+            0,
+            canvasTestOutput.width,
+            canvasTestOutput.height
+          );
+
+          let outputMask = runGrabCutWithMask(bgr, maskHullCopy, 10);
+          cv.imshow("canvasTestOutput", outputMask);
+          cv.imshow("canvasCaptureOutput", src);
+
+          measureMaskHeight();
+
+          outputMask.delete();
+          maskHullCopy.delete();
         });
       }
 
@@ -263,9 +304,9 @@
           V = centerHSV[2];
         // console.log(`Center HSV = [${H}, ${S}, ${V}]`);
         let centerRGBA = src.ucharPtr(centerY, centerX);
-        console.log(
-          `Center RGB = [${centerRGBA[0]}, ${centerRGBA[1]}, ${centerRGBA[2]}]`
-        );
+        // console.log(
+        //   `Center RGB = [${centerRGBA[0]}, ${centerRGBA[1]}, ${centerRGBA[2]}]`
+        // );
         let vDelta = 40,
           hDelta = 40,
           sDelta = 30;
@@ -304,22 +345,19 @@
           // Expand the convex hull by a factor of 1.2.
           let expandedHull = expandHull(hull, 1.1);
 
-          let currentHullPoints = hullMatToPoints(expandedHull);
-
-          // Apply EMA smoothing (adjust alpha as desired; e.g., 0.5 for moderate smoothing).
-          let alpha = 0.5;
-          let smoothedPoints = smoothHullEMA(currentHullPoints, alpha);
-
-          // Convert the smoothed points back into a cv.Mat.
-          let smoothedHull = pointsToMat(smoothedPoints);
-
           let result = src.clone();
           let contoursVec = new cv.MatVector();
 
           contoursVec.push_back(expandedHull);
           let contourColor = new cv.Scalar(0, 255, 0, 255);
+          // console.log(maskHull);
+          // If maskHull already exists, delete it before reassigning
+          // if (maskHull !== null) {
+          //   maskHull.delete();
+          //   maskHull = null;
+          // }
 
-          let maskHull = new cv.Mat.zeros(src.rows, src.cols, cv.CV_8UC1);
+          maskHull = new cv.Mat.zeros(src.rows, src.cols, cv.CV_8UC1);
           cv.fillPoly(maskHull, contoursVec, new cv.Scalar(255));
 
           cv.drawContours(result, contoursVec, 0, contourColor, 2, cv.LINE_8);
@@ -333,72 +371,12 @@
           kernel.delete();
           closedMask.delete();
           blurred.delete();
-          maskHull.delete();
         } else {
           console.log("No contours found!");
         }
         lowerMat.delete();
         upperMat.delete();
         mask.delete();
-      }
-
-      /**
-       * Extracts an array of points from a convex hull cv.Mat.
-       * @param {cv.Mat} hull - A cv.Mat with type CV_32SC2.
-       * @return {Array} - An array of objects, each with properties x and y.
-       */
-      function hullMatToPoints(hull) {
-        let numPoints = hull.rows;
-        let points = [];
-        for (let i = 0; i < numPoints; i++) {
-          let x = hull.data32S[i * 2];
-          let y = hull.data32S[i * 2 + 1];
-          points.push({ x: x, y: y });
-        }
-        return points;
-      }
-
-      /**
-       * Smooths the current hull points using an exponential moving average.
-       * @param {Array} currentPoints - An array of point objects [{x, y}, ...] for the current frame.
-       * @param {number} alpha - Smoothing factor between 0 and 1 (lower = more smoothing).
-       * @return {Array} - The smoothed array of points.
-       */
-      function smoothHullEMA(currentPoints, alpha) {
-        // If there is no previous hull or the number of points differs, use current points.
-        if (!prevHullPoints || prevHullPoints.length !== currentPoints.length) {
-          prevHullPoints = currentPoints;
-          return currentPoints;
-        }
-
-        let smoothedPoints = [];
-        for (let i = 0; i < currentPoints.length; i++) {
-          let newX = Math.round(
-            alpha * currentPoints[i].x + (1 - alpha) * prevHullPoints[i].x
-          );
-          let newY = Math.round(
-            alpha * currentPoints[i].y + (1 - alpha) * prevHullPoints[i].y
-          );
-          smoothedPoints.push({ x: newX, y: newY });
-        }
-
-        // Update global for the next frame.
-        prevHullPoints = smoothedPoints;
-        return smoothedPoints;
-      }
-
-      /**
-       * Converts an array of point objects into a cv.Mat (Nx1 CV_32SC2).
-       * @param {Array} points - An array of objects, each with properties x and y.
-       * @return {cv.Mat} - The resulting cv.Mat.
-       */
-      function pointsToMat(points) {
-        let flatArray = [];
-        points.forEach((pt) => {
-          flatArray.push(pt.x);
-          flatArray.push(pt.y);
-        });
-        return cv.matFromArray(points.length, 1, cv.CV_32SC2, flatArray);
       }
 
       function getBiggestContour(mask) {
@@ -467,6 +445,175 @@
 
         // Create and return a new Mat from the expanded points.
         return cv.matFromArray(numPoints, 1, cv.CV_32SC2, expandedPoints);
+      }
+
+      /**
+       * Runs GrabCut segmentation using a hull mask for initialization.
+       *
+       * @param {cv.Mat} src - The source image (cv.Mat).
+       * @param {cv.Mat} maskHull - A binary mask (CV_8UC1) where the region of interest is white (255).
+       * @param {number} iterations - The number of iterations to run GrabCut (default 5).
+       * @return {cv.Mat} - The resulting binary mask (CV_8UC1) with foreground=255 and background=0.
+       */
+      function runGrabCutWithMask(src, maskHull, iterations = 5) {
+        // Create a new mask for GrabCut of the same size as src, initialized as background.
+        let grabCutMask = new cv.Mat(
+          src.rows,
+          src.cols,
+          cv.CV_8UC1,
+          new cv.Scalar(cv.GC_BGD)
+        );
+
+        // Use maskHull to mark pixels as probable foreground.
+        for (let i = 0; i < maskHull.rows; i++) {
+          for (let j = 0; j < maskHull.cols; j++) {
+            if (maskHull.ucharPtr(i, j)[0] === 255) {
+              grabCutMask.ucharPtr(i, j)[0] = cv.GC_PR_FGD;
+            }
+          }
+        }
+
+        // Prepare the background and foreground models (1x65, CV_64FC1).
+        let bgdModel = new cv.Mat(1, 65, cv.CV_64FC1, new cv.Scalar(0));
+        let fgdModel = new cv.Mat(1, 65, cv.CV_64FC1, new cv.Scalar(0));
+
+        // Dummy rectangle; not used in GC_INIT_WITH_MASK mode.
+        let dummyRect = new cv.Rect(0, 0, 1, 1);
+
+        // Run GrabCut using mask initialization mode.
+        cv.grabCut(
+          src,
+          grabCutMask,
+          dummyRect,
+          bgdModel,
+          fgdModel,
+          iterations,
+          cv.GC_INIT_WITH_MASK
+        );
+
+        // Post-process the mask: set pixels marked as definite or probable foreground to 255, else 0.
+        for (let i = 0; i < grabCutMask.rows; i++) {
+          for (let j = 0; j < grabCutMask.cols; j++) {
+            let pixel = grabCutMask.ucharPtr(i, j)[0];
+            if (pixel === cv.GC_FGD || pixel === cv.GC_PR_FGD) {
+              grabCutMask.ucharPtr(i, j)[0] = 255;
+            } else {
+              grabCutMask.ucharPtr(i, j)[0] = 0;
+            }
+          }
+        }
+
+        // Clean up temporary models.
+        bgdModel.delete();
+        fgdModel.delete();
+
+        // Return the resulting mask (caller is responsible for deleting it when done)
+        return grabCutMask;
+      }
+
+      // function measureMaskHeight() {
+      //   // Get the mask data from canvas
+      //   const maskData = canvasTestContext.getImageData(
+      //     0,
+      //     0,
+      //     canvasTestOutput.width,
+      //     canvasTestOutput.height
+      //   ).data;
+
+      //   let topPixel = null;
+      //   let bottomPixel = null;
+
+      //   // Loop through the entire image to find the highest and lowest mask pixel
+      //   for (let y = 0; y < canvasTestOutput.height; y++) {
+      //     for (let x = 0; x < canvasTestOutput.width; x++) {
+      //       const index = (y * canvasTestOutput.width + x) * 4; // RGBA index
+
+      //       if (maskData[index + 3] > 0) {
+      //         // Check Alpha channel for mask presence
+      //         if (topPixel === null || y < topPixel) topPixel = y; // Find highest point
+      //         if (bottomPixel === null || y > bottomPixel) bottomPixel = y; // Find lowest point
+      //       }
+      //     }
+      //   }
+
+      //   if (topPixel === null || bottomPixel === null) {
+      //     alert("No mask detected. Try segmenting an object first.");
+      //     return;
+      //   }
+
+      //   // Calculate mask height
+      //   let maskHeight = bottomPixel - topPixel;
+      //   console.log(`Mask height: ${maskHeight} pixels`);
+
+      //   // Draw a vertical measurement line from top-most to bottom-most detected mask pixel
+      //   canvasTestContext.strokeStyle = "red";
+      //   canvasTestContext.lineWidth = 2;
+      //   canvasTestContext.beginPath();
+      //   canvasTestContext.moveTo(canvasTestOutput.width / 2, topPixel); // Center X
+      //   canvasTestContext.lineTo(canvasTestOutput.width / 2, bottomPixel);
+      //   canvasTestContext.stroke();
+
+      //   // Draw text showing height
+      //   canvasTestContext.fillStyle = "red";
+      //   canvasTestContext.font = "18px Arial";
+      //   canvasTestContext.fillText(
+      //     `${maskHeight} px`,
+      //     canvasTestOutput.width / 2 + 10,
+      //     (topPixel + bottomPixel) / 2
+      //   );
+      // }
+      function measureMaskHeight() {
+        // Get the mask data from canvasTestOutput
+        const maskData = canvasTestContext.getImageData(
+          0,
+          0,
+          canvasTestOutput.width,
+          canvasTestOutput.height
+        ).data;
+
+        let topPixel = null;
+        let bottomPixel = null;
+
+        // Loop through the entire image to find the highest and lowest mask pixel
+        for (let y = 0; y < canvasTestOutput.height; y++) {
+          for (let x = 0; x < canvasTestOutput.width; x++) {
+            const index = (y * canvasTestOutput.width + x) * 4; // RGBA index
+
+            // Instead of checking the alpha channel (index + 3),
+            // check the red channel (index) since your binary mask is black or white.
+            if (maskData[index] > 128) {
+              // threshold; adjust if needed
+              if (topPixel === null || y < topPixel) topPixel = y; // highest (top-most) point
+              if (bottomPixel === null || y > bottomPixel) bottomPixel = y; // lowest (bottom-most) point
+            }
+          }
+        }
+
+        if (topPixel === null || bottomPixel === null) {
+          alert("No mask detected. Try segmenting an object first.");
+          return;
+        }
+
+        // Calculate mask height
+        let maskHeight = bottomPixel - topPixel;
+        console.log(`Mask height: ${maskHeight} pixels`);
+
+        // Draw a vertical measurement line from top-most to bottom-most detected mask pixel
+        canvasCaptureContext.strokeStyle = "red";
+        canvasCaptureContext.lineWidth = 2;
+        canvasCaptureContext.beginPath();
+        canvasCaptureContext.moveTo(canvasTestOutput.width / 2, topPixel); // Center X
+        canvasCaptureContext.lineTo(canvasTestOutput.width / 2, bottomPixel);
+        canvasCaptureContext.stroke();
+
+        // Draw text showing height
+        canvasCaptureContext.fillStyle = "red";
+        canvasCaptureContext.font = "18px Arial";
+        canvasCaptureContext.fillText(
+          `${maskHeight} px`,
+          canvasTestOutput.width / 2 + 10,
+          (topPixel + bottomPixel) / 2
+        );
       }
     </script>
   </body>
