@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Center Color Segmentation (OpenCV.js, Polling)</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load OpenCV.js -->
+    <script
+      src="https://docs.opencv.org/4.x/opencv.js"
+      type="text/javascript"
+    ></script>
+  </head>
+  <body class="bg-gray-100 p-6">
+    <h1 class="text-3xl font-bold text-center mb-4">
+      Center-Color Segmentation (Polling for OpenCV.js)
+    </h1>
+    <p class="text-center mb-6">
+      Click "Segment" to capture the center color from the live feed (camera or
+      video) and highlight matching pixels.
+    </p>
+
+    <!-- New controls -->
+    <div class="flex justify-center space-x-4 mb-4">
+      <button
+        id="btnStartCamera"
+        class="bg-green-500 hover:bg-green-600 text-white font-semibold py-2 px-4 rounded shadow"
+      >
+        Start Camera
+      </button>
+      <button
+        id="btnLoadVideo"
+        class="bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 px-4 rounded shadow"
+      >
+        Load Video
+      </button>
+      <button
+        id="btnPauseVideo"
+        class="bg-red-500 hover:bg-red-600 text-white font-semibold py-2 px-4 rounded shadow hidden"
+      >
+        Pause Video
+      </button>
+      <input type="file" id="videoInput" accept="video/*" class="hidden" />
+    </div>
+
+    <!-- Hidden video element (used for both camera and video file) -->
+    <video id="video" width="640" height="480" class="hidden"></video>
+    <!-- Hidden canvas for frame copying -->
+    <canvas id="hiddenCanvas" width="640" height="480" class="hidden"></canvas>
+    <canvas
+      id="canvasTestOutput"
+      width="640"
+      height="480"
+      class="border border-gray-700 shadow-lg"
+    ></canvas>
+    <!-- Canvas to display segmentation result -->
+    <div class="flex justify-center mb-6">
+      <div class="relative inline-block">
+        <!-- Your Output Canvas -->
+
+        <canvas
+          id="canvasOutput"
+          width="640"
+          height="480"
+          class="border border-gray-700 shadow-lg"
+        ></canvas>
+
+        <!-- Circle overlay, always centered -->
+        <div
+          class="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 pointer-events-none"
+        >
+          <div
+            class="w-8 h-8 rounded-full border-4 border-gray-200/50 bg-transparent"
+          ></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- <div class="flex justify-center">
+      <button
+        onclick="processFrame()"
+        class="bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 px-4 rounded shadow"
+      >
+        Segment
+      </button>
+    </div> -->
+
+    <script type="text/javascript">
+      // === Global Variables ===
+      let prevHullPoints = null;
+      let cameraStream = null;
+      let video = document.getElementById("video");
+      let canvasOutput = document.getElementById("canvasOutput");
+      let canvasTestOutput = document.getElementById("canvasTestOutput");
+      let hiddenCanvas = document.getElementById("hiddenCanvas");
+      let hiddenCtx = hiddenCanvas.getContext("2d", {
+        willReadFrequently: true,
+      });
+
+      let src = null,
+        bgr = null,
+        hsv = null;
+      let streaming = false;
+      let mode = ""; // "camera" or "videoFile"
+
+      // 1. Poll until OpenCV.js is ready
+      async function checkOpenCVReady() {
+        if (typeof cv !== "undefined") {
+          cv = await cv;
+
+          console.log("OpenCV is ready!");
+          initOpenCV();
+        } else {
+          console.log("OpenCV not loaded yet...");
+          setTimeout(checkOpenCVReady, 50);
+        }
+      }
+      checkOpenCVReady();
+
+      // 2. Initialization (set up buttons)
+      function initOpenCV() {
+        console.log("Initializing application...");
+
+        const btnStartCamera = document.getElementById("btnStartCamera");
+        const btnLoadVideo = document.getElementById("btnLoadVideo");
+        const btnPauseVideo = document.getElementById("btnPauseVideo");
+        const videoInput = document.getElementById("videoInput");
+
+        // Start Camera button
+        btnStartCamera.addEventListener("click", () => {
+          // If the camera is currently active, stop it.
+          if (streaming && mode === "camera") {
+            if (video.srcObject) {
+              // Stop all tracks of the stream.
+              video.srcObject.getTracks().forEach((track) => track.stop());
+            }
+            video.srcObject = null;
+            streaming = false;
+            mode = "";
+            btnStartCamera.textContent = "Start Camera";
+          } else {
+            // Otherwise, start the camera.
+            mode = "camera";
+            startCamera(); // This will request the camera and set streaming to true.
+            btnStartCamera.textContent = "Stop Camera";
+          }
+        });
+
+        // Load Video button
+        btnLoadVideo.addEventListener("click", () => {
+          videoInput.click();
+        });
+
+        // When a video file is selected
+        videoInput.addEventListener("change", (e) => {
+          let file = e.target.files[0];
+          if (file) {
+            mode = "videoFile";
+            let fileURL = URL.createObjectURL(file);
+            video.src = fileURL;
+            video.play();
+            streaming = true;
+            // Show the Pause/Resume button for video files.
+            btnPauseVideo.classList.remove("hidden");
+            video.addEventListener("playing", onVideoReady, { once: true });
+          }
+        });
+
+        // Pause/Resume Video button
+        btnPauseVideo.addEventListener("click", () => {
+          if (video.paused) {
+            video.play();
+            btnPauseVideo.textContent = "Pause Video";
+          } else {
+            video.pause();
+            btnPauseVideo.textContent = "Resume Video";
+          }
+        });
+      }
+
+      // 3. Start the camera (triggered by button)
+      function startCamera() {
+        navigator.mediaDevices
+          .getUserMedia({
+            video: true,
+            audio: false,
+          })
+          .then((stream) => {
+            video.srcObject = stream;
+            cameraStream = stream;
+            video.play();
+            streaming = true;
+            video.addEventListener("playing", onVideoReady, { once: true });
+          })
+          .catch((err) => {
+            console.error("Error: " + err);
+          });
+      }
+
+      function onVideoReady() {
+        // Get current video dimensions.
+        const vw = video.videoWidth;
+        const vh = video.videoHeight;
+        if (vw === 0 || vh === 0) {
+          // If dimensions are not yet available, try again later.
+          requestAnimationFrame(onVideoReady);
+          return;
+        }
+
+        // Update the dimensions of the hidden canvas and output canvas.
+        hiddenCanvas.width = vw;
+        hiddenCanvas.height = vh;
+        canvasOutput.width = vw;
+        canvasOutput.height = vh;
+
+        // If the Mats are not created or their dimensions don't match the current video,
+        // then (re)allocate them.
+        if (!src || src.cols !== vw || src.rows !== vh) {
+          if (src) {
+            src.delete();
+            bgr.delete();
+            hsv.delete();
+          }
+          src = new cv.Mat(vh, vw, cv.CV_8UC4);
+          bgr = new cv.Mat(vh, vw, cv.CV_8UC3);
+          hsv = new cv.Mat(vh, vw, cv.CV_8UC3);
+        }
+
+        if (!streaming) {
+          console.log("Camera not started.");
+          return;
+        }
+
+        // Draw the current video frame onto the hidden canvas.
+        hiddenCtx.drawImage(video, 0, 0, vw, vh);
+        let imageData = hiddenCtx.getImageData(0, 0, vw, vh);
+        src.data.set(imageData.data);
+
+        // Convert from RGBA to HSV (via BGR)
+        cv.cvtColor(src, bgr, cv.COLOR_RGBA2BGR);
+        cv.cvtColor(bgr, hsv, cv.COLOR_BGR2HSV);
+
+        // Process the current frame (segmentation and contour extraction)
+        processFrame();
+
+        // Schedule the next frame.
+        requestAnimationFrame(onVideoReady);
+      }
+
+      // 5. Process the current frame (segmentation and contour extraction)
+      function processFrame() {
+        if (!streaming || !src || !hsv) {
+          console.warn("Source not ready.");
+          return;
+        }
+        const centerX = Math.floor(hsv.cols / 2);
+        const centerY = Math.floor(hsv.rows / 2);
+        let centerHSV = hsv.ucharPtr(centerY, centerX);
+        let H = centerHSV[0],
+          S = centerHSV[1],
+          V = centerHSV[2];
+        // console.log(`Center HSV = [${H}, ${S}, ${V}]`);
+        let centerRGBA = src.ucharPtr(centerY, centerX);
+        console.log(
+          `Center RGB = [${centerRGBA[0]}, ${centerRGBA[1]}, ${centerRGBA[2]}]`
+        );
+        let vDelta = 40,
+          hDelta = 40,
+          sDelta = 30;
+
+        let lowerV = Math.max(V - vDelta, 0),
+          upperV = Math.min(V + vDelta, 255);
+        let lowerH = Math.max(H - hDelta, 0),
+          upperH = Math.min(H + hDelta, 255);
+        let lowerS = Math.max(S - sDelta, 0),
+          upperS = Math.min(S + sDelta, 255);
+
+        let lowerScalar = new cv.Scalar(lowerH, lowerS, lowerV);
+        let upperScalar = new cv.Scalar(upperH, upperS, upperV);
+
+        let lowerMat = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), lowerScalar);
+        let upperMat = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), upperScalar);
+
+        let mask = new cv.Mat();
+
+        cv.inRange(hsv, lowerMat, upperMat, mask);
+
+        let blurred = new cv.Mat();
+        cv.medianBlur(mask, blurred, 5);
+
+        let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
+        let closedMask = new cv.Mat();
+        cv.morphologyEx(blurred, closedMask, cv.MORPH_OPEN, kernel);
+        // Use closedMask for further processing.
+
+        let biggestContour = getBiggestContour(mask);
+
+        if (biggestContour !== null) {
+          let hull = new cv.Mat();
+          cv.convexHull(biggestContour, hull, false, true);
+
+          // Expand the convex hull by a factor of 1.2.
+          let expandedHull = expandHull(hull, 1.1);
+
+          let currentHullPoints = hullMatToPoints(expandedHull);
+
+          // Apply EMA smoothing (adjust alpha as desired; e.g., 0.5 for moderate smoothing).
+          let alpha = 0.5;
+          let smoothedPoints = smoothHullEMA(currentHullPoints, alpha);
+
+          // Convert the smoothed points back into a cv.Mat.
+          let smoothedHull = pointsToMat(smoothedPoints);
+
+          let result = src.clone();
+          let contoursVec = new cv.MatVector();
+
+          contoursVec.push_back(expandedHull);
+          let contourColor = new cv.Scalar(0, 255, 0, 255);
+
+          let maskHull = new cv.Mat.zeros(src.rows, src.cols, cv.CV_8UC1);
+          cv.fillPoly(maskHull, contoursVec, new cv.Scalar(255));
+
+          cv.drawContours(result, contoursVec, 0, contourColor, 2, cv.LINE_8);
+          cv.imshow("canvasOutput", result);
+          // cv.imshow("canvasTestOutput", maskHull);
+          contoursVec.delete();
+          hull.delete();
+          expandedHull.delete();
+          biggestContour.delete();
+          result.delete();
+          kernel.delete();
+          closedMask.delete();
+          blurred.delete();
+          maskHull.delete();
+        } else {
+          console.log("No contours found!");
+        }
+        lowerMat.delete();
+        upperMat.delete();
+        mask.delete();
+      }
+
+      /**
+       * Extracts an array of points from a convex hull cv.Mat.
+       * @param {cv.Mat} hull - A cv.Mat with type CV_32SC2.
+       * @return {Array} - An array of objects, each with properties x and y.
+       */
+      function hullMatToPoints(hull) {
+        let numPoints = hull.rows;
+        let points = [];
+        for (let i = 0; i < numPoints; i++) {
+          let x = hull.data32S[i * 2];
+          let y = hull.data32S[i * 2 + 1];
+          points.push({ x: x, y: y });
+        }
+        return points;
+      }
+
+      /**
+       * Smooths the current hull points using an exponential moving average.
+       * @param {Array} currentPoints - An array of point objects [{x, y}, ...] for the current frame.
+       * @param {number} alpha - Smoothing factor between 0 and 1 (lower = more smoothing).
+       * @return {Array} - The smoothed array of points.
+       */
+      function smoothHullEMA(currentPoints, alpha) {
+        // If there is no previous hull or the number of points differs, use current points.
+        if (!prevHullPoints || prevHullPoints.length !== currentPoints.length) {
+          prevHullPoints = currentPoints;
+          return currentPoints;
+        }
+
+        let smoothedPoints = [];
+        for (let i = 0; i < currentPoints.length; i++) {
+          let newX = Math.round(
+            alpha * currentPoints[i].x + (1 - alpha) * prevHullPoints[i].x
+          );
+          let newY = Math.round(
+            alpha * currentPoints[i].y + (1 - alpha) * prevHullPoints[i].y
+          );
+          smoothedPoints.push({ x: newX, y: newY });
+        }
+
+        // Update global for the next frame.
+        prevHullPoints = smoothedPoints;
+        return smoothedPoints;
+      }
+
+      /**
+       * Converts an array of point objects into a cv.Mat (Nx1 CV_32SC2).
+       * @param {Array} points - An array of objects, each with properties x and y.
+       * @return {cv.Mat} - The resulting cv.Mat.
+       */
+      function pointsToMat(points) {
+        let flatArray = [];
+        points.forEach((pt) => {
+          flatArray.push(pt.x);
+          flatArray.push(pt.y);
+        });
+        return cv.matFromArray(points.length, 1, cv.CV_32SC2, flatArray);
+      }
+
+      function getBiggestContour(mask) {
+        let contours = new cv.MatVector();
+        let hierarchy = new cv.Mat();
+        cv.findContours(
+          mask,
+          contours,
+          hierarchy,
+          cv.RETR_EXTERNAL,
+          cv.CHAIN_APPROX_SIMPLE
+        );
+        let maxArea = 0;
+        let maxContour = null;
+        for (let i = 0; i < contours.size(); i++) {
+          let cnt = contours.get(i);
+          let area = cv.contourArea(cnt);
+          if (area > maxArea) {
+            maxArea = area;
+            if (maxContour !== null) {
+              maxContour.delete();
+            }
+            maxContour = cnt.clone();
+          }
+          cnt.delete();
+        }
+        hierarchy.delete();
+        contours.delete();
+        return maxContour;
+      }
+
+      /**
+       * Expands a convex hull by a given scale factor relative to its centroid.
+       *
+       * @param {cv.Mat} hull - The input convex hull (Nx1 CV_32SC2 matrix).
+       * @param {number} scale - The scale factor (e.g., 1.2 to expand by 20%).
+       * @return {cv.Mat} - A new convex hull (Nx1 CV_32SC2 matrix) with expanded points.
+       */
+      function expandHull(hull, scale) {
+        // Number of points in the hull.
+        let numPoints = hull.rows;
+        let sumX = 0,
+          sumY = 0;
+
+        // Compute the centroid of the hull.
+        for (let i = 0; i < numPoints; i++) {
+          let x = hull.data32S[i * 2];
+          let y = hull.data32S[i * 2 + 1];
+          sumX += x;
+          sumY += y;
+        }
+        let cx = sumX / numPoints;
+        let cy = sumY / numPoints;
+
+        // Create an array for the expanded points.
+        let expandedPoints = [];
+        for (let i = 0; i < numPoints; i++) {
+          let x = hull.data32S[i * 2];
+          let y = hull.data32S[i * 2 + 1];
+          // Scale the point away from the centroid.
+          let newX = Math.round(cx + scale * (x - cx));
+          let newY = Math.round(cy + scale * (y - cy));
+          expandedPoints.push(newX);
+          expandedPoints.push(newY);
+        }
+
+        // Create and return a new Mat from the expanded points.
+        return cv.matFromArray(numPoints, 1, cv.CV_32SC2, expandedPoints);
+      }
+    </script>
+  </body>
+</html>

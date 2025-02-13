@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Center Color Segmentation (OpenCV.js, Polling)</title>
+
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Load OpenCV.js -->
+    <script
+      src="https://docs.opencv.org/4.x/opencv.js"
+      type="text/javascript"
+    ></script>
+
+    <style>
+      /* Additional custom styles (if needed) */
+    </style>
+  </head>
+  <body class="bg-gray-100 p-6">
+    <h1 class="text-3xl font-bold text-center mb-4">
+      Center-Color Segmentation (Polling for OpenCV.js)
+    </h1>
+    <p class="text-center mb-6">
+      Click "Segment" to capture the center color from the live camera feed and
+      highlight matching pixels.
+    </p>
+
+    <!-- Hidden video feed -->
+    <video id="video" width="640" height="480" autoplay class="hidden"></video>
+
+    <!-- Hidden canvas for frame copying -->
+    <canvas id="hiddenCanvas" width="640" height="480" class="hidden"></canvas>
+
+    <!-- Canvas to display result -->
+    <div class="flex justify-center mb-6">
+      <canvas
+        id="canvasOutput"
+        width="640"
+        height="480"
+        class="border border-gray-700 shadow-lg"
+      ></canvas>
+    </div>
+
+    <div class="flex justify-center">
+      <button
+        onclick="processFrame()"
+        class="bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 px-4 rounded shadow"
+      >
+        Segment
+      </button>
+    </div>
+
+    <script type="text/javascript">
+      // === Global Variables ===
+      let video = document.getElementById("video");
+      let canvasOutput = document.getElementById("canvasOutput");
+
+      // For hidden copying
+      let hiddenCanvas = document.getElementById("hiddenCanvas");
+      let hiddenCtx = hiddenCanvas.getContext("2d", {
+        willReadFrequently: true,
+      });
+
+      let src = null; // cv.Mat for RGBA video frame
+      let bgr = null; // Intermediate Mat for BGR conversion
+      let hsv = null; // cv.Mat for HSV image
+      let streaming = false;
+
+      function delay(ms) {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+      }
+
+      // 1. Poll until OpenCV.js is ready
+      async function checkOpenCVReady() {
+        if (typeof cv !== "undefined") {
+          cv = await cv;
+          console.log(cv);
+          console.log("OpenCV is ready!");
+          // await delay(5000); // Optional delay
+          initOpenCV();
+        } else {
+          console.log("OpenCV not loaded yet...");
+          setTimeout(checkOpenCVReady, 50); // check again in 50ms
+        }
+      }
+      checkOpenCVReady(); // start polling
+
+      // 2. Initialize after OpenCV loads
+      function initOpenCV() {
+        console.log("Initializing application...");
+        startCamera();
+
+        // When video starts playing, create our Mats.
+        video.addEventListener("playing", () => {
+          console.log(cv.getBuildInformation());
+          // Create Mats for video frame processing.
+          src = new cv.Mat(video.height, video.width, cv.CV_8UC4);
+          bgr = new cv.Mat(video.height, video.width, cv.CV_8UC3);
+          hsv = new cv.Mat(video.height, video.width, cv.CV_8UC3);
+
+          // Start the frame capture loop.
+          requestAnimationFrame(onVideoReady);
+        });
+      }
+
+      // 3. Start the camera.
+      function startCamera() {
+        navigator.mediaDevices
+          .getUserMedia({ video: true, audio: false })
+          .then((stream) => {
+            video.srcObject = stream;
+            streaming = true;
+          })
+          .catch((err) => {
+            console.error("Error: " + err);
+          });
+      }
+
+      // 4. Continuously read frames from <video> via hidden canvas.
+      function onVideoReady() {
+        if (!streaming) {
+          console.log("Camera not started.");
+          return;
+        }
+        // Draw the video frame onto the hidden canvas.
+        hiddenCtx.drawImage(
+          video,
+          0,
+          0,
+          hiddenCanvas.width,
+          hiddenCanvas.height
+        );
+        let imageData = hiddenCtx.getImageData(
+          0,
+          0,
+          hiddenCanvas.width,
+          hiddenCanvas.height
+        );
+        // Copy imageData into src Mat (RGBA).
+        src.data.set(imageData.data);
+        // Convert RGBA → BGR, then BGR → HSV.
+        cv.cvtColor(src, bgr, cv.COLOR_RGBA2BGR);
+        cv.cvtColor(bgr, hsv, cv.COLOR_BGR2HSV);
+
+        processFrame();
+        // Schedule the next frame.
+        requestAnimationFrame(onVideoReady);
+      }
+
+      // 5. Process frame to segment center color.
+      function processFrame() {
+        if (!streaming || !src || !hsv) {
+          console.warn("Camera not ready or OpenCV mats not initialized.");
+          return;
+        }
+
+        // Get the center pixel's HSV values.
+        const centerX = Math.floor(hsv.cols / 2);
+        const centerY = Math.floor(hsv.rows / 2);
+        let centerHSV = hsv.ucharPtr(centerY, centerX); // [H, S, V]
+        let H = centerHSV[0]; // 0..179
+        let S = centerHSV[1]; // 0..255
+        let V = centerHSV[2]; // 0..255
+
+        console.log(`Center HSV = [${H}, ${S}, ${V}]`);
+
+        // Also get the center pixel's RGB (from src which is RGBA).
+        let centerRGBA = src.ucharPtr(centerY, centerX); // [R, G, B, A]
+        console.log(
+          `Center RGB = [${centerRGBA[0]}, ${centerRGBA[1]}, ${centerRGBA[2]}]`
+        );
+
+        // Define tolerance ranges for segmentation.
+        let vDelta = 60;
+        let lowerV = Math.max(V - vDelta, 0);
+        let upperV = Math.min(V + vDelta, 255);
+
+        let hDelta = 50;
+        let lowerH = Math.max(H - hDelta, 0);
+        let upperH = Math.min(H + hDelta, 255);
+
+        let sDelta = 30;
+        let lowerS = Math.max(S - sDelta, 0);
+        let upperS = Math.min(S + sDelta, 255);
+
+        // Create lower and upper bound scalars for inRange.
+        let lowerScalar = new cv.Scalar(lowerH, lowerS, lowerV);
+        let upperScalar = new cv.Scalar(upperH, upperS, upperV);
+
+        let lowerMat = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), lowerScalar);
+        let upperMat = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), upperScalar);
+        let mask = new cv.Mat();
+
+        cv.inRange(hsv, lowerMat, upperMat, mask);
+
+        // Get the largest contour from the mask.
+        let biggestContour = getBiggestContour(mask);
+
+        if (biggestContour !== null) {
+          // Draw the largest contour on a copy of the original image.
+          let result = src.clone();
+          let contoursVec = new cv.MatVector();
+          contoursVec.push_back(biggestContour);
+          let contourColor = new cv.Scalar(0, 255, 0, 255); // Green
+          cv.drawContours(result, contoursVec, 0, contourColor, 2, cv.LINE_8);
+          cv.imshow("canvasOutput", result);
+          // Clean up temporary Mats.
+          contoursVec.delete();
+          biggestContour.delete();
+          result.delete();
+        } else {
+          console.log("No contours found!");
+        }
+
+        // Cleanup.
+        lowerMat.delete();
+        upperMat.delete();
+        mask.delete();
+      }
+
+      /**
+       * Returns the largest contour found in a binary mask.
+       * @param {cv.Mat} mask - A binary image (CV_8UC1) where nonzero pixels are foreground.
+       * @return {cv.Mat|null} The biggest contour (as a cv.Mat of points), or null if none found.
+       */
+      function getBiggestContour(mask) {
+        let contours = new cv.MatVector();
+        let hierarchy = new cv.Mat();
+        cv.findContours(
+          mask,
+          contours,
+          hierarchy,
+          cv.RETR_EXTERNAL,
+          cv.CHAIN_APPROX_SIMPLE
+        );
+
+        let maxArea = 0;
+        let maxContour = null;
+        for (let i = 0; i < contours.size(); i++) {
+          let cnt = contours.get(i);
+          let area = cv.contourArea(cnt);
+          if (area > maxArea) {
+            maxArea = area;
+            if (maxContour !== null) {
+              maxContour.delete();
+            }
+            maxContour = cnt.clone();
+          }
+          cnt.delete();
+        }
+        hierarchy.delete();
+        contours.delete();
+        return maxContour;
+      }
+    </script>
+  </body>
+</html>
