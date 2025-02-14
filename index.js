@@ -18,6 +18,7 @@ let hiddenCtx = hiddenCanvas.getContext("2d", {
 });
 
 let src = null,
+  srcOutput = null,
   bgr = null,
   hsv = null;
 let streaming = false;
@@ -47,23 +48,25 @@ function initOpenCV() {
   const btnCapture = document.getElementById("btnCapture");
   const videoInput = document.getElementById("videoInput");
 
+  function stopCamera() {
+    if (video.srcObject) {
+      // Stop all tracks of the stream.
+      video.srcObject.getTracks().forEach((track) => track.stop());
+    }
+    video.srcObject = null;
+    streaming = false;
+    mode = "";
+    btnStartCamera.textContent = "Start Camera";
+  }
+
   // Start Camera button
   btnStartCamera.addEventListener("click", () => {
     // If the camera is currently active, stop it.
     if (streaming && mode === "camera") {
-      if (video.srcObject) {
-        // Stop all tracks of the stream.
-        video.srcObject.getTracks().forEach((track) => track.stop());
-      }
-      video.srcObject = null;
-      streaming = false;
-      mode = "";
-      btnStartCamera.textContent = "Start Camera";
+      stopCamera();
     } else {
       // Otherwise, start the camera.
-      mode = "camera";
       startCamera(); // This will request the camera and set streaming to true.
-      btnStartCamera.textContent = "Stop Camera";
     }
   });
 
@@ -99,6 +102,7 @@ function initOpenCV() {
   });
 
   btnCapture.addEventListener("click", function () {
+    stopCamera();
     // Get the captured canvas and its context.
     let maskHullCopy = maskHull.clone();
 
@@ -112,7 +116,7 @@ function initOpenCV() {
 
     let outputMask = runGrabCutWithMask(bgr, maskHullCopy, 10);
     cv.imshow("canvasTestOutput", outputMask);
-    cv.imshow("canvasCaptureOutput", src);
+    cv.imshow("canvasCaptureOutput", srcOutput);
 
     measureMaskHeight();
 
@@ -123,6 +127,8 @@ function initOpenCV() {
 
 // 3. Start the camera (triggered by button)
 function startCamera() {
+  mode = "camera";
+
   navigator.mediaDevices
     .getUserMedia({
       video: {
@@ -140,9 +146,16 @@ function startCamera() {
     .catch((err) => {
       console.error("Error: " + err);
     });
+
+  btnStartCamera.textContent = "Stop Camera";
 }
 
 function onVideoReady() {
+  if (cv.aruco && cv.aruco.DICT_6X6_250) {
+    console.log("ArUco module exists.");
+  } else {
+    console.log("ArUco module not available in this build.");
+  }
   // Get current video dimensions.
   const vw = video.videoWidth;
   const vh = video.videoHeight;
@@ -167,6 +180,7 @@ function onVideoReady() {
       hsv.delete();
     }
     src = new cv.Mat(vh, vw, cv.CV_8UC4);
+    srcOutput = new cv.Mat(vh, vw, cv.CV_8UC4);
     bgr = new cv.Mat(vh, vw, cv.CV_8UC3);
     hsv = new cv.Mat(vh, vw, cv.CV_8UC3);
   }
@@ -180,6 +194,7 @@ function onVideoReady() {
   hiddenCtx.drawImage(video, 0, 0, vw, vh);
   let imageData = hiddenCtx.getImageData(0, 0, vw, vh);
   src.data.set(imageData.data);
+  srcOutput.data.set(imageData.data);
 
   // Convert from RGBA to HSV (via BGR)
   cv.cvtColor(src, bgr, cv.COLOR_RGBA2BGR);
